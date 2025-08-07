@@ -4,98 +4,148 @@ import { supabase, Restaurant } from '../lib/supabase.js';
 import { CrawlOptions, CrawlResult } from '../types/index.js';
 import { parse } from 'date-fns';
 
-const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html';
-const RECORDS_PER_PAGE = 20;
+// The FEHD site loads data dynamically, we need to call their data endpoint directly
+const DATA_URL = 'https://www.fehd.gov.hk/english/licensing/text/LP_Restaurants_EN.XML';
+const RECORDS_PER_PAGE = 50; // We'll process in batches
 const PREVIEW_LIMIT = 1000;
 const TOTAL_RECORDS = 12545;
 
 export class RestaurantCrawler {
-  private async fetchPage(pageNumber: number): Promise<string> {
-    const params = new URLSearchParams({
-      page: pageNumber.toString(),
-      subType: 'All Licensed General Restaurants',
-      licenseType: 'General Restaurant Licence',
-      lang: 'en-us'
-    });
-    
-    const url = `${BASE_URL}?${params.toString()}`;
-    
+  private async fetchAllData(): Promise<string> {
     try {
-      const response = await axios.get(url, {
+      // FEHD provides an XML file with all restaurant data
+      const response = await axios.get(DATA_URL, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/xml, text/xml, */*',
         },
-        timeout: 30000,
+        timeout: 60000, // Longer timeout for large file
       });
       
       return response.data;
     } catch (error) {
-      throw new Error(`Failed to fetch page ${pageNumber}: ${error}`);
+      // If XML fails, try the CSV endpoint
+      try {
+        const csvUrl = 'https://www.fehd.gov.hk/english/licensing/LP_Restaurants_EN.csv';
+        const response = await axios.get(csvUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/csv, */*',
+          },
+          timeout: 60000,
+        });
+        return response.data;
+      } catch (csvError) {
+        throw new Error(`Failed to fetch data: ${error}`);
+      }
     }
   }
 
-  private parseRestaurant(row: cheerio.Cheerio<any>, $: cheerio.CheerioAPI): Partial<Restaurant> | null {
-    try {
-      // FEHD table has columns: Row# | Shopsign | District | Address | Licence/Permit Number (Valid till) | Licence/Permit Type
-      const cells = row.find('td');
+  private parseXMLData(xmlData: string): Array<Partial<Restaurant>> {
+    const restaurants: Array<Partial<Restaurant>> = [];
+    const $ = cheerio.load(xmlData, { xmlMode: true });
+    
+    // Look for restaurant entries in XML
+    $('Restaurant, RESTAURANT, restaurant').each((i, elem) => {
+      const $elem = $(elem);
       
-      if (cells.length < 6) return null;
+      const restaurant: Partial<Restaurant> = {
+        name: $elem.find('NAME, Name, name').text().trim() || 
+              $elem.find('SHOP_SIGN, ShopSign, shopsign').text().trim(),
+        district: $elem.find('DISTRICT, District, district').text().trim() || null,
+        address: $elem.find('ADDRESS, Address, address').text().trim() || null,
+        licence_no: $elem.find('LICENCE_NO, LicenceNo, licence_no, LICENSE_NO').text().trim().replace(/\s+/g, ''),
+        licence_type: $elem.find('TYPE, Type, type').text().trim() || 'General Restaurant Licence',
+        valid_til: this.parseDate($elem.find('EXPIRY, Expiry, expiry, VALID_TIL, ValidTil').text().trim()),
+      };
       
-      // Skip the first cell (row number)
-      const name = $(cells[1]).text().trim();
-      const district = $(cells[2]).text().trim();
-      const address = $(cells[3]).text().trim();
-      const licenceInfo = $(cells[4]).text().trim(); // Contains both licence number and expiry date
-      const licenceType = $(cells[5]).text().trim();
+      if (restaurant.name && restaurant.licence_no) {
+        restaurants.push(restaurant);
+      }
+    });
+
+    // If no restaurants found with that structure, try CSV parsing
+    if (restaurants.length === 0) {
+      return this.parseCSVData(xmlData);
+    }
+    
+    return restaurants;
+  }
+
+  private parseCSVData(csvData: string): Array<Partial<Restaurant>> {
+    const restaurants: Array<Partial<Restaurant>> = [];
+    const lines = csvData.split('\n');
+    
+    // Skip header line
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
       
-      // Skip if no name
-      if (!name) return null;
+      // Parse CSV - handle quoted fields
+      const fields = this.parseCSVLine(line);
       
-      // Parse licence number and expiry date from combined field
-      // Format: "22 98 803448 (27-09-2025)"
-      let licenceNo = '';
-      let validTil: string | null = null;
-      
-      if (licenceInfo) {
-        // Extract licence number (everything before the parenthesis)
-        const licenceMatch = licenceInfo.match(/^([^(]+)/);
-        if (licenceMatch) {
-          licenceNo = licenceMatch[1].trim().replace(/\s+/g, ''); // Remove spaces from licence number
-        }
+      if (fields.length >= 5) {
+        const restaurant: Partial<Restaurant> = {
+          name: fields[0] || fields[1], // Sometimes name is in different position
+          district: fields[1] || fields[2] || null,
+          address: fields[2] || fields[3] || null,
+          licence_no: (fields[3] || fields[4] || '').replace(/\s+/g, ''),
+          licence_type: fields[4] || fields[5] || 'General Restaurant Licence',
+          valid_til: this.parseDate(fields[5] || fields[6] || ''),
+        };
         
-        // Extract expiry date from parentheses
-        const dateMatch = licenceInfo.match(/\(([^)]+)\)/);
-        if (dateMatch) {
-          const expiryDateText = dateMatch[1];
-          try {
-            // FEHD format is DD-MM-YYYY
-            const parsed = parse(expiryDateText, 'dd-MM-yyyy', new Date());
-            if (!isNaN(parsed.getTime())) {
-              validTil = parsed.toISOString().split('T')[0];
-            }
-          } catch {
-            validTil = null;
-          }
+        if (restaurant.name && restaurant.licence_no) {
+          restaurants.push(restaurant);
         }
       }
-      
-      // Skip if no licence number
-      if (!licenceNo) return null;
-
-      return {
-        name,
-        district: district || null,
-        address: address || null,
-        licence_no: licenceNo,
-        licence_type: licenceType || 'General Restaurant Licence',
-        valid_til: validTil,
-      };
-    } catch (error) {
-      console.error('Error parsing restaurant row:', error);
-      return null;
     }
+    
+    return restaurants;
+  }
+
+  private parseCSVLine(line: string): string[] {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    
+    result.push(current.trim());
+    return result;
+  }
+
+  private parseDate(dateStr: string): string | null {
+    if (!dateStr) return null;
+    
+    // Remove parentheses if present
+    dateStr = dateStr.replace(/[()]/g, '').trim();
+    
+    // Try different date formats
+    const formats = ['dd-MM-yyyy', 'dd/MM/yyyy', 'yyyy-MM-dd', 'MM/dd/yyyy'];
+    
+    for (const format of formats) {
+      try {
+        const parsed = parse(dateStr, format, new Date());
+        if (!isNaN(parsed.getTime())) {
+          return parsed.toISOString().split('T')[0];
+        }
+      } catch {
+        // Try next format
+      }
+    }
+    
+    return null;
   }
 
   private async upsertRestaurant(restaurant: Partial<Restaurant>): Promise<{ isNew: boolean }> {
@@ -126,7 +176,7 @@ export class RestaurantCrawler {
   }
 
   async crawl(options: CrawlOptions = {}): Promise<CrawlResult> {
-    const { full = false, startPage = 1 } = options;
+    const { full = false } = options;
     const result: CrawlResult = {
       totalRecords: 0,
       newRecords: 0,
@@ -134,111 +184,59 @@ export class RestaurantCrawler {
       errors: 0,
     };
 
-    const { data: statusData } = await supabase
-      .from('system')
-      .select('value')
-      .eq('key', 'status')
-      .single();
-
-    const currentStatus = statusData?.value;
-
-    let pagesToCrawl: number;
-    let actualStartPage = startPage;
-
-    if (!full) {
-      // Preview mode: first 1000 records
-      pagesToCrawl = Math.ceil(PREVIEW_LIMIT / RECORDS_PER_PAGE);
-    } else {
-      if (currentStatus === 'preview_done') {
-        // Continue from where preview left off
-        actualStartPage = Math.ceil(PREVIEW_LIMIT / RECORDS_PER_PAGE) + 1;
-        pagesToCrawl = Math.ceil(TOTAL_RECORDS / RECORDS_PER_PAGE) - actualStartPage + 1;
-      } else {
-        // Full crawl from beginning
-        pagesToCrawl = Math.ceil(TOTAL_RECORDS / RECORDS_PER_PAGE);
+    try {
+      console.log('Fetching restaurant data from FEHD...');
+      const data = await this.fetchAllData();
+      console.log(`Received ${data.length} bytes of data`);
+      
+      const restaurants = this.parseXMLData(data);
+      console.log(`Parsed ${restaurants.length} restaurants`);
+      
+      if (restaurants.length === 0) {
+        throw new Error('No restaurants found in data');
       }
-    }
-
-    console.log(`Starting crawl: ${pagesToCrawl} pages from page ${actualStartPage}`);
-
-    for (let page = actualStartPage; page < actualStartPage + pagesToCrawl; page++) {
-      try {
-        console.log(`Fetching page ${page}...`);
-        const html = await this.fetchPage(page);
-        const $ = cheerio.load(html);
-        
-        // Find the main table with restaurant data
-        // FEHD uses a table with class or within a specific div
-        let rows = $('table tr').toArray();
-        
-        // Skip header row(s)
-        rows = rows.filter((row) => {
-          const firstCell = $(row).find('td').first().text().trim();
-          // Skip if it's a header or empty row or just a number (row number)
-          return firstCell && 
-                 !firstCell.includes('Shopsign') && 
-                 !firstCell.includes('Company Name') && 
-                 !firstCell.match(/^\d+$/); // Skip if it's just a number
-        });
-
-        console.log(`Found ${rows.length} rows on page ${page}`);
-
-        if (rows.length === 0) {
-          // No more data, we've reached the end
-          console.log(`No data found on page ${page}, stopping crawl`);
-          break;
-        }
-
-        for (const row of rows) {
-          try {
-            const restaurant = this.parseRestaurant($(row), $);
-            if (restaurant && restaurant.licence_no) {
-              const { isNew } = await this.upsertRestaurant(restaurant);
-              result.totalRecords++;
-              if (isNew) {
-                result.newRecords++;
-              } else {
-                result.updatedRecords++;
-              }
-
-              if (!full && result.totalRecords >= PREVIEW_LIMIT) {
-                break;
-              }
+      
+      // Process restaurants
+      const limit = full ? restaurants.length : Math.min(PREVIEW_LIMIT, restaurants.length);
+      
+      for (let i = 0; i < limit; i++) {
+        try {
+          const restaurant = restaurants[i];
+          if (restaurant && restaurant.licence_no) {
+            const { isNew } = await this.upsertRestaurant(restaurant);
+            result.totalRecords++;
+            if (isNew) {
+              result.newRecords++;
+            } else {
+              result.updatedRecords++;
             }
-          } catch (error) {
-            console.error('Error processing restaurant:', error);
-            result.errors++;
           }
+        } catch (error) {
+          console.error('Error processing restaurant:', error);
+          result.errors++;
         }
-
-        if (!full && result.totalRecords >= PREVIEW_LIMIT) {
-          break;
-        }
-
-        // Be nice to the server - wait 1 second between requests
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error(`Error on page ${page}:`, error);
-        result.errors++;
-        // Continue with next page even if one fails
       }
+      
+      // Update old restaurants to not be "new" anymore (30 days old)
+      await supabase
+        .from('restaurants')
+        .update({ new_flag: false })
+        .lt('first_seen', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+
+      // Update system status
+      const newStatus = full ? 'seeded' : 'preview_done';
+      await supabase.from('system').upsert({
+        key: 'status',
+        value: newStatus,
+        updated_at: new Date().toISOString(),
+      });
+      
+      console.log(`Crawl completed: ${result.totalRecords} total, ${result.newRecords} new, ${result.updatedRecords} updated, ${result.errors} errors`);
+      
+    } catch (error) {
+      console.error('Crawl failed:', error);
+      throw error;
     }
-
-    // Update old restaurants to not be "new" anymore (30 days old)
-    await supabase
-      .from('restaurants')
-      .update({ new_flag: false })
-      .lt('first_seen', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-
-    // Update system status
-    const newStatus = full ? 'seeded' : 'preview_done';
-    await supabase.from('system').upsert({
-      key: 'status',
-      value: newStatus,
-      updated_at: new Date().toISOString(),
-    });
-
-    console.log(`Crawl completed: ${result.totalRecords} total, ${result.newRecords} new, ${result.updatedRecords} updated, ${result.errors} errors`);
 
     return result;
   }
