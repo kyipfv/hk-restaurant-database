@@ -3,13 +3,9 @@ import cors from '@fastify/cors';
 import dotenv from 'dotenv';
 import { restaurantRoutes } from './routes/restaurants.js';
 import { jobRoutes } from './routes/jobs.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import * as path from 'path';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const fastify = Fastify({
   logger: process.env.NODE_ENV === 'development',
@@ -29,8 +25,9 @@ async function start(): Promise<void> {
     });
 
     if (process.env.NODE_ENV === 'production') {
-      fastify.register(import('@fastify/static'), {
-        root: path.join(__dirname, '..', 'client', 'dist'),
+      const staticPlugin = await import('@fastify/static');
+      fastify.register(staticPlugin.default, {
+        root: path.join(process.cwd(), 'client', 'dist'),
         prefix: '/',
       });
 

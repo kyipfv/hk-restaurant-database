@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { supabase, Restaurant } from '../lib/supabase.js';
 import { CrawlOptions, CrawlResult } from '../types/index.js';
-import { parseDate } from 'date-fns';
+import { parse } from 'date-fns';
 
 const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html';
 const RECORDS_PER_PAGE = 20;
@@ -26,7 +26,7 @@ export class RestaurantCrawler {
     }
   }
 
-  private parseRestaurant(row: cheerio.Cheerio<cheerio.Element>): Partial<Restaurant> | null {
+  private parseRestaurant(row: cheerio.Cheerio<any>): Partial<Restaurant> | null {
     const $ = cheerio.load(row.html() || '');
     const cells = $('td').toArray();
 
@@ -44,7 +44,7 @@ export class RestaurantCrawler {
     let validTil: string | null = null;
     if (validTilText) {
       try {
-        const parsed = parseDate(validTilText, 'dd/MM/yyyy', new Date());
+        const parsed = parse(validTilText, 'dd/MM/yyyy', new Date());
         if (!isNaN(parsed.getTime())) {
           validTil = parsed.toISOString().split('T')[0];
         }
