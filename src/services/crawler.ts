@@ -5,18 +5,61 @@ import { CrawlOptions, CrawlResult } from '../types/index.js';
 import { parse } from 'date-fns';
 
 const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html';
+const FORM_URL = 'https://www.fehd.gov.hk/english/licensing/listSearch.do';
 const RECORDS_PER_PAGE = 20;
 const PREVIEW_LIMIT = 1000;
 const TOTAL_RECORDS = 12545;
 
 export class RestaurantCrawler {
+  private cookies: string = '';
+
+  private async initializeSession(): Promise<void> {
+    try {
+      // First, get the initial page to establish session
+      const initResponse = await axios.get(BASE_URL, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+      
+      // Store cookies if any
+      const setCookies = initResponse.headers['set-cookie'];
+      if (setCookies) {
+        this.cookies = setCookies.map(cookie => cookie.split(';')[0]).join('; ');
+      }
+
+      // Submit the form to get the restaurant list
+      const formData = new URLSearchParams({
+        'lang': 'en-us',
+        'type': 'RL',
+        'licenseType': 'General Restaurant Licence',
+        'subType': 'All Licensed General Restaurants',
+        'showTitle': 'true'
+      });
+
+      await axios.post(FORM_URL, formData, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cookie': this.cookies,
+          'Referer': BASE_URL
+        },
+      });
+    } catch (error) {
+      throw new Error(`Failed to initialize session: ${error}`);
+    }
+  }
+
   private async fetchPage(pageNumber: number): Promise<string> {
-    const url = `${BASE_URL}?page=${pageNumber}&subType=All%20Licensed%20General%20Restaurants&licenseType=General%20Restaurant%20Licence&lang=en-us`;
+    // Use the URL pattern you provided
+    const url = `${BASE_URL}?page=${pageNumber}&subType=All%20Licensed%20General%20Restaurants&licenseType=General%20Restaurant%20Licence&showTitle=undefined&lang=en-us`;
     
     try {
       const response = await axios.get(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Cookie': this.cookies,
+          'Referer': BASE_URL
         },
         timeout: 30000,
       });
@@ -99,6 +142,9 @@ export class RestaurantCrawler {
       errors: 0,
     };
 
+    // Initialize session before crawling
+    await this.initializeSession();
+
     const { data: statusData } = await supabase
       .from('system')
       .select('value')
@@ -126,7 +172,9 @@ export class RestaurantCrawler {
         const html = await this.fetchPage(page);
         const $ = cheerio.load(html);
         
-        const rows = $('table tr').toArray().slice(1);
+        // Look for the table with restaurant data
+        // FEHD site typically has the data in a specific table
+        const rows = $('table').find('tr').toArray().filter((_, index) => index > 0);
 
         for (const row of rows) {
           try {
