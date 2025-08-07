@@ -34,7 +34,7 @@ async function start(): Promise<void> {
       });
 
       fastify.setNotFoundHandler((req, reply) => {
-        if (!req.url.startsWith('/api') && !req.url.startsWith('/jobs')) {
+        if (!req.url.startsWith('/api') && !req.url.startsWith('/jobs') && !req.url.startsWith('/test')) {
           reply.sendFile('index.html');
         } else {
           reply.status(404).send({ error: 'Not found' });
