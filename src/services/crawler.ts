@@ -6,9 +6,7 @@ import { parse } from 'date-fns';
 
 // The FEHD site loads data dynamically, we need to call their data endpoint directly
 const DATA_URL = 'https://www.fehd.gov.hk/english/licensing/text/LP_Restaurants_EN.XML';
-const RECORDS_PER_PAGE = 50; // We'll process in batches
 const PREVIEW_LIMIT = 1000;
-const TOTAL_RECORDS = 12545;
 
 export class RestaurantCrawler {
   private async fetchAllData(): Promise<string> {
@@ -46,7 +44,7 @@ export class RestaurantCrawler {
     const $ = cheerio.load(xmlData, { xmlMode: true });
     
     // Look for restaurant entries in XML
-    $('Restaurant, RESTAURANT, restaurant').each((i, elem) => {
+    $('Restaurant, RESTAURANT, restaurant').each((_i, elem) => {
       const $elem = $(elem);
       
       const restaurant: Partial<Restaurant> = {
