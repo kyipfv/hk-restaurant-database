@@ -1,4 +1,4 @@
-import { supabase, Restaurant } from '../lib/supabase.js';
+import { supabase } from '../lib/supabase.js';
 import { CrawlResult } from '../types/index.js';
 
 export class TestCrawler {
