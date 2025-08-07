@@ -1,69 +1,82 @@
 import axios from 'axios';
-import * as cheerio from 'cheerio';
 import { supabase, Restaurant } from '../lib/supabase.js';
 import { CrawlOptions, CrawlResult } from '../types/index.js';
 import { parse } from 'date-fns';
 
-const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html';
-const RECORDS_PER_PAGE = 20;
+// FEHD uses a JSON API endpoint for the actual data
+const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/getData2.php';
+const RECORDS_PER_PAGE = 50; // FEHD returns 50 records per page
 const PREVIEW_LIMIT = 1000;
 const TOTAL_RECORDS = 12545;
 
+interface FEHDRestaurant {
+  companyName: string;
+  district: string;
+  address: string;
+  licenseNo: string;
+  licenseType: string;
+  expiryDate: string; // Format: DD-MM-YYYY
+}
+
 export class RestaurantCrawler {
-  private async fetchPage(pageNumber: number): Promise<string> {
-    // Direct URL approach - the FEHD site can be accessed directly with parameters
-    const url = `${BASE_URL}?page=${pageNumber}&subType=All%20Licensed%20General%20Restaurants&licenseType=General%20Restaurant%20Licence&lang=en-us`;
+  private async fetchPage(pageNumber: number): Promise<FEHDRestaurant[]> {
+    const params = new URLSearchParams({
+      page: pageNumber.toString(),
+      subType: 'All Licensed General Restaurants',
+      licenseType: 'General Restaurant Licence',
+      lang: 'en-us'
+    });
+    
+    const url = `${BASE_URL}?${params.toString()}`;
     
     try {
       const response = await axios.get(url, {
         headers: {
+          'Accept': 'application/json, text/javascript, */*; q=0.01',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Referer': 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
         },
         timeout: 30000,
       });
-      return response.data;
+
+      // FEHD returns JSON data
+      if (response.data && Array.isArray(response.data)) {
+        return response.data as FEHDRestaurant[];
+      }
+      
+      return [];
     } catch (error) {
       throw new Error(`Failed to fetch page ${pageNumber}: ${error}`);
     }
   }
 
-  private parseRestaurant(row: cheerio.Cheerio<any>): Partial<Restaurant> | null {
-    const $ = cheerio.load(row.html() || '');
-    const cells = $('td').toArray();
-
-    if (cells.length < 6) return null;
-
-    const name = $(cells[0]).text().trim();
-    const district = $(cells[1]).text().trim();
-    const address = $(cells[2]).text().trim();
-    const licenceNo = $(cells[3]).text().trim();
-    const licenceType = $(cells[4]).text().trim();
-    const validTilText = $(cells[5]).text().trim();
-
-    if (!name || !licenceNo) return null;
-
-    let validTil: string | null = null;
-    if (validTilText) {
-      try {
-        const parsed = parse(validTilText, 'dd/MM/yyyy', new Date());
-        if (!isNaN(parsed.getTime())) {
-          validTil = parsed.toISOString().split('T')[0];
+  private parseRestaurant(data: FEHDRestaurant): Partial<Restaurant> | null {
+    try {
+      // Parse date from DD-MM-YYYY to YYYY-MM-DD
+      let validTil: string | null = null;
+      if (data.expiryDate) {
+        try {
+          const parsed = parse(data.expiryDate, 'dd-MM-yyyy', new Date());
+          if (!isNaN(parsed.getTime())) {
+            validTil = parsed.toISOString().split('T')[0];
+          }
+        } catch {
+          validTil = null;
         }
-      } catch {
-        validTil = null;
       }
-    }
 
-    return {
-      name,
-      district: district || null,
-      address: address || null,
-      licence_no: licenceNo,
-      licence_type: licenceType || 'General Restaurant Licence',
-      valid_til: validTil,
-    };
+      return {
+        name: data.companyName || '',
+        district: data.district || null,
+        address: data.address || null,
+        licence_no: data.licenseNo || '',
+        licence_type: data.licenseType || 'General Restaurant Licence',
+        valid_til: validTil,
+      };
+    } catch (error) {
+      return null;
+    }
   }
 
   private async upsertRestaurant(restaurant: Partial<Restaurant>): Promise<{ isNew: boolean }> {
@@ -114,34 +127,32 @@ export class RestaurantCrawler {
     let actualStartPage = startPage;
 
     if (!full) {
+      // Preview mode: first 1000 records
       pagesToCrawl = Math.ceil(PREVIEW_LIMIT / RECORDS_PER_PAGE);
     } else {
       if (currentStatus === 'preview_done') {
+        // Continue from where preview left off
         actualStartPage = Math.ceil(PREVIEW_LIMIT / RECORDS_PER_PAGE) + 1;
         pagesToCrawl = Math.ceil(TOTAL_RECORDS / RECORDS_PER_PAGE) - actualStartPage + 1;
       } else {
+        // Full crawl from beginning
         pagesToCrawl = Math.ceil(TOTAL_RECORDS / RECORDS_PER_PAGE);
       }
     }
 
     for (let page = actualStartPage; page < actualStartPage + pagesToCrawl; page++) {
       try {
-        const html = await this.fetchPage(page);
-        const $ = cheerio.load(html);
+        const restaurants = await this.fetchPage(page);
         
-        // Debug: Log if we got HTML
-        if (!html || html.length < 100) {
-          throw new Error('No HTML content received');
+        if (!restaurants || restaurants.length === 0) {
+          // No more data, stop crawling
+          break;
         }
-        
-        // Look for table rows - FEHD site has data in table format
-        // Skip header row (index 0)
-        const rows = $('tr').toArray().slice(1);
 
-        for (const row of rows) {
+        for (const restaurantData of restaurants) {
           try {
-            const restaurant = this.parseRestaurant($(row));
-            if (restaurant) {
+            const restaurant = this.parseRestaurant(restaurantData);
+            if (restaurant && restaurant.licence_no) {
               const { isNew } = await this.upsertRestaurant(restaurant);
               result.totalRecords++;
               if (isNew) {
@@ -163,14 +174,22 @@ export class RestaurantCrawler {
           break;
         }
 
+        // Be nice to the server
         await new Promise((resolve) => setTimeout(resolve, 1000));
       } catch (error) {
         result.errors++;
+        // Log but continue with next page
+        console.error(`Error on page ${page}:`, error);
       }
     }
 
-    await supabase.from('restaurants').update({ new_flag: false }).lt('first_seen', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    // Update old restaurants to not be "new" anymore (30 days old)
+    await supabase
+      .from('restaurants')
+      .update({ new_flag: false })
+      .lt('first_seen', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
 
+    // Update system status
     const newStatus = full ? 'seeded' : 'preview_done';
     await supabase.from('system').upsert({
       key: 'status',
