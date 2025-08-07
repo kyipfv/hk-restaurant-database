@@ -49,21 +49,21 @@ export async function testRoutes(fastify: FastifyInstance): Promise<void> {
           tableIndex: i,
           totalRows: rows.length,
           firstRowCellCount: firstRowCells.length,
-          firstRowTexts: firstRowCells.map((j, cell) => $(cell).text().trim()).get(),
+          firstRowTexts: firstRowCells.map((_j, cell) => $(cell).text().trim()).get(),
           secondRowCellCount: secondRowCells.length,
-          secondRowTexts: secondRowCells.map((j, cell) => $(cell).text().trim()).get(),
+          secondRowTexts: secondRowCells.map((_j, cell) => $(cell).text().trim()).get(),
           hasDataRows: rows.length > 1
         };
       }).get();
 
       // Try to find restaurant data
-      let restaurantData = null;
+      let restaurantData: any = null;
       tables.each((i, table) => {
         const rows = $(table).find('tr');
         rows.each((j, row) => {
           const cells = $(row).find('td');
           if (cells.length >= 5) {
-            const cellTexts = cells.map((k, cell) => $(cell).text().trim()).get();
+            const cellTexts = cells.map((_k, cell) => $(cell).text().trim()).get();
             // Look for something that looks like restaurant data
             if (cellTexts.some(text => text && text.includes('Restaurant')) || 
                 cellTexts.some(text => text && text.match(/\d{2}\s+\d{2}\s+\d{6}/))) {
@@ -76,8 +76,10 @@ export async function testRoutes(fastify: FastifyInstance): Promise<void> {
               return false; // Break out of loop
             }
           }
+          return true;
         });
         if (restaurantData) return false;
+        return true;
       });
 
       return reply.send({
