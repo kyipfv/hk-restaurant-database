@@ -1,0 +1,21 @@
+jobs:
+  - name: weekly-restaurant-crawl
+    type: cron
+    schedule: "0 18 * * 1"  # Every Monday at 02:00 HKT (18:00 UTC)
+    buildCommand: npm install && npm run build
+    startCommand: node dist/scripts/cron-runner.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: hk-restaurant-database
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_KEY
+        fromService:
+          type: web
+          name: hk-restaurant-database
+          envVarKey: SUPABASE_KEY
+      - key: BACKEND_URL
+        value: https://hk-restaurant-database.onrender.com
