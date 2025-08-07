@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import dotenv from 'dotenv';
 import { restaurantRoutes } from './routes/restaurants.js';
 import { jobRoutes } from './routes/jobs.js';
+import { testRoutes } from './routes/test.js';
 import * as path from 'path';
 
 dotenv.config();
@@ -19,6 +20,7 @@ async function start(): Promise<void> {
 
     await fastify.register(restaurantRoutes);
     await fastify.register(jobRoutes);
+    await fastify.register(testRoutes);
 
     fastify.get('/health', async () => {
       return { status: 'ok', timestamp: new Date().toISOString() };
