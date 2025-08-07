@@ -5,61 +5,21 @@ import { CrawlOptions, CrawlResult } from '../types/index.js';
 import { parse } from 'date-fns';
 
 const BASE_URL = 'https://www.fehd.gov.hk/english/licensing/ecsvread_food2.html';
-const FORM_URL = 'https://www.fehd.gov.hk/english/licensing/listSearch.do';
 const RECORDS_PER_PAGE = 20;
 const PREVIEW_LIMIT = 1000;
 const TOTAL_RECORDS = 12545;
 
 export class RestaurantCrawler {
-  private cookies: string = '';
-
-  private async initializeSession(): Promise<void> {
-    try {
-      // First, get the initial page to establish session
-      const initResponse = await axios.get(BASE_URL, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      });
-      
-      // Store cookies if any
-      const setCookies = initResponse.headers['set-cookie'];
-      if (setCookies) {
-        this.cookies = setCookies.map(cookie => cookie.split(';')[0]).join('; ');
-      }
-
-      // Submit the form to get the restaurant list
-      const formData = new URLSearchParams({
-        'lang': 'en-us',
-        'type': 'RL',
-        'licenseType': 'General Restaurant Licence',
-        'subType': 'All Licensed General Restaurants',
-        'showTitle': 'true'
-      });
-
-      await axios.post(FORM_URL, formData, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Cookie': this.cookies,
-          'Referer': BASE_URL
-        },
-      });
-    } catch (error) {
-      throw new Error(`Failed to initialize session: ${error}`);
-    }
-  }
-
   private async fetchPage(pageNumber: number): Promise<string> {
-    // Use the URL pattern you provided
-    const url = `${BASE_URL}?page=${pageNumber}&subType=All%20Licensed%20General%20Restaurants&licenseType=General%20Restaurant%20Licence&showTitle=undefined&lang=en-us`;
+    // Direct URL approach - the FEHD site can be accessed directly with parameters
+    const url = `${BASE_URL}?page=${pageNumber}&subType=All%20Licensed%20General%20Restaurants&licenseType=General%20Restaurant%20Licence&lang=en-us`;
     
     try {
       const response = await axios.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Cookie': this.cookies,
-          'Referer': BASE_URL
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
         },
         timeout: 30000,
       });
@@ -142,9 +102,6 @@ export class RestaurantCrawler {
       errors: 0,
     };
 
-    // Initialize session before crawling
-    await this.initializeSession();
-
     const { data: statusData } = await supabase
       .from('system')
       .select('value')
@@ -172,9 +129,14 @@ export class RestaurantCrawler {
         const html = await this.fetchPage(page);
         const $ = cheerio.load(html);
         
-        // Look for the table with restaurant data
-        // FEHD site typically has the data in a specific table
-        const rows = $('table').find('tr').toArray().filter((_, index) => index > 0);
+        // Debug: Log if we got HTML
+        if (!html || html.length < 100) {
+          throw new Error('No HTML content received');
+        }
+        
+        // Look for table rows - FEHD site has data in table format
+        // Skip header row (index 0)
+        const rows = $('tr').toArray().slice(1);
 
         for (const row of rows) {
           try {
