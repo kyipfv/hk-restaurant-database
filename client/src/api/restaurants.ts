@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Restaurant, RestaurantResponse, DistrictResponse } from '../types';
+import type { Restaurant, RestaurantResponse, DistrictResponse } from '../types';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3000' : '';
 

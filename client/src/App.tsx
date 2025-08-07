@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RestaurantTable } from './components/RestaurantTable';
 import { SearchBar } from './components/SearchBar';
