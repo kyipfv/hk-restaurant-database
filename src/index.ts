@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { restaurantRoutes } from './routes/restaurants.js';
 import { jobRoutes } from './routes/jobs.js';
 import { testRoutes } from './routes/test.js';
+import { debugRoutes } from './routes/debug.js';
 import * as path from 'path';
 
 dotenv.config();
@@ -21,6 +22,7 @@ async function start(): Promise<void> {
     await fastify.register(restaurantRoutes);
     await fastify.register(jobRoutes);
     await fastify.register(testRoutes);
+    await fastify.register(debugRoutes);
 
     fastify.get('/health', async () => {
       return { status: 'ok', timestamp: new Date().toISOString() };
@@ -34,7 +36,7 @@ async function start(): Promise<void> {
       });
 
       fastify.setNotFoundHandler((req, reply) => {
-        if (!req.url.startsWith('/api') && !req.url.startsWith('/jobs') && !req.url.startsWith('/test')) {
+        if (!req.url.startsWith('/api') && !req.url.startsWith('/jobs') && !req.url.startsWith('/test') && !req.url.startsWith('/debug')) {
           reply.sendFile('index.html');
         } else {
           reply.status(404).send({ error: 'Not found' });
