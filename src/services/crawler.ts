@@ -36,7 +36,7 @@ export class RestaurantCrawler {
     }
   }
 
-  private parseRestaurant(row: cheerio.Cheerio<cheerio.Element>, $: cheerio.CheerioAPI): Partial<Restaurant> | null {
+  private parseRestaurant(row: cheerio.Cheerio<any>, $: cheerio.CheerioAPI): Partial<Restaurant> | null {
     try {
       // FEHD table has columns: Company Name | District | Address | Licence No. | Licence Type | Expiry Date
       const cells = row.find('td');
