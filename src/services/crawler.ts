@@ -38,34 +38,51 @@ export class RestaurantCrawler {
 
   private parseRestaurant(row: cheerio.Cheerio<any>, $: cheerio.CheerioAPI): Partial<Restaurant> | null {
     try {
-      // FEHD table has columns: Company Name | District | Address | Licence No. | Licence Type | Expiry Date
+      // FEHD table has columns: Row# | Shopsign | District | Address | Licence/Permit Number (Valid till) | Licence/Permit Type
       const cells = row.find('td');
       
       if (cells.length < 6) return null;
       
-      const name = $(cells[0]).text().trim();
-      const district = $(cells[1]).text().trim();
-      const address = $(cells[2]).text().trim();
-      const licenceNo = $(cells[3]).text().trim();
-      const licenceType = $(cells[4]).text().trim();
-      const expiryDateText = $(cells[5]).text().trim();
+      // Skip the first cell (row number)
+      const name = $(cells[1]).text().trim();
+      const district = $(cells[2]).text().trim();
+      const address = $(cells[3]).text().trim();
+      const licenceInfo = $(cells[4]).text().trim(); // Contains both licence number and expiry date
+      const licenceType = $(cells[5]).text().trim();
       
-      // Skip if no name or licence number
-      if (!name || !licenceNo) return null;
+      // Skip if no name
+      if (!name) return null;
       
-      // Parse date from DD-MM-YYYY to YYYY-MM-DD
+      // Parse licence number and expiry date from combined field
+      // Format: "22 98 803448 (27-09-2025)"
+      let licenceNo = '';
       let validTil: string | null = null;
-      if (expiryDateText) {
-        try {
-          // FEHD format is DD-MM-YYYY
-          const parsed = parse(expiryDateText, 'dd-MM-yyyy', new Date());
-          if (!isNaN(parsed.getTime())) {
-            validTil = parsed.toISOString().split('T')[0];
+      
+      if (licenceInfo) {
+        // Extract licence number (everything before the parenthesis)
+        const licenceMatch = licenceInfo.match(/^([^(]+)/);
+        if (licenceMatch) {
+          licenceNo = licenceMatch[1].trim().replace(/\s+/g, ''); // Remove spaces from licence number
+        }
+        
+        // Extract expiry date from parentheses
+        const dateMatch = licenceInfo.match(/\(([^)]+)\)/);
+        if (dateMatch) {
+          const expiryDateText = dateMatch[1];
+          try {
+            // FEHD format is DD-MM-YYYY
+            const parsed = parse(expiryDateText, 'dd-MM-yyyy', new Date());
+            if (!isNaN(parsed.getTime())) {
+              validTil = parsed.toISOString().split('T')[0];
+            }
+          } catch {
+            validTil = null;
           }
-        } catch {
-          validTil = null;
         }
       }
+      
+      // Skip if no licence number
+      if (!licenceNo) return null;
 
       return {
         name,
@@ -157,8 +174,11 @@ export class RestaurantCrawler {
         // Skip header row(s)
         rows = rows.filter((row) => {
           const firstCell = $(row).find('td').first().text().trim();
-          // Skip if it's a header or empty row
-          return firstCell && !firstCell.includes('Company Name') && !firstCell.includes('Name of Company');
+          // Skip if it's a header or empty row or just a number (row number)
+          return firstCell && 
+                 !firstCell.includes('Shopsign') && 
+                 !firstCell.includes('Company Name') && 
+                 !firstCell.match(/^\d+$/); // Skip if it's just a number
         });
 
         console.log(`Found ${rows.length} rows on page ${page}`);
