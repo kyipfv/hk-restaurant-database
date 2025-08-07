@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "nodemon --exec tsx src/index.ts",
     "build": "tsc",
-    "build:client": "cd client && npm ci && npm run build:prod",
+    "build:client": "cd client && npm install --production=false && npm run build:prod",
     "build:all": "npm run build && npm run build:client",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
